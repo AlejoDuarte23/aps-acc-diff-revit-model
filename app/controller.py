@@ -11,7 +11,7 @@ import requests
 import viktor as vkt
 
 
-APS_INTEGRATION_NAME = "aps-integration-viktor"
+APS_INTEGRATION_NAME = "aps"
 APS_BASE_URL = "https://developer.api.autodesk.com"
 REQUEST_TIMEOUT = 60
 
