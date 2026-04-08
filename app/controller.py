@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 import textwrap
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,11 @@ import viktor as vkt
 APS_INTEGRATION_NAME = "aps"
 APS_BASE_URL = "https://developer.api.autodesk.com"
 REQUEST_TIMEOUT = 60
+DIFF_POLL_TIMEOUT_SECONDS = int(os.getenv("APS_DIFF_POLL_TIMEOUT_SECONDS", "600"))
+DIFF_POLL_INTERVAL_SECONDS = float(os.getenv("APS_DIFF_POLL_INTERVAL_SECONDS", "2"))
+DIFF_POLL_MAX_INTERVAL_SECONDS = float(
+    os.getenv("APS_DIFF_POLL_MAX_INTERVAL_SECONDS", "10")
+)
 
 @dataclass
 class ViewerState:
@@ -220,16 +226,19 @@ def wait_for_diff(
     project_id: str,
     diff_id: str,
     token: str,
-    max_wait_seconds: int = 120,
+    max_wait_seconds: int = DIFF_POLL_TIMEOUT_SECONDS,
 ) -> None:
     acc_project_id = _acc_project_id(project_id)
     url = f"{APS_BASE_URL}/construction/index/v2/projects/{acc_project_id}/diffs/{diff_id}"
 
     started = time.time()
+    sleep_seconds = DIFF_POLL_INTERVAL_SECONDS
+    last_result: dict[str, Any] = {}
     while True:
         response = requests.get(url, headers=_get_headers(token), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         result = response.json()
+        last_result = result
 
         state = result.get("state")
         if state == "FINISHED":
@@ -237,10 +246,17 @@ def wait_for_diff(
         if state in {"FAILED", "CANCELLED"}:
             raise RuntimeError(f"Diff job ended with state={state}: {result}")
 
-        if time.time() - started > max_wait_seconds:
-            raise TimeoutError(f"Timed out waiting for diff {diff_id}.")
+        elapsed = time.time() - started
+        if elapsed > max_wait_seconds:
+            details = json.dumps(last_result, sort_keys=True)
+            raise TimeoutError(
+                "Timed out waiting for diff "
+                f"{diff_id} after {int(elapsed)}s. Last state={state!r}. "
+                f"Last APS response: {details}"
+            )
 
-        time.sleep(2)
+        time.sleep(sleep_seconds)
+        sleep_seconds = min(sleep_seconds * 1.5, DIFF_POLL_MAX_INTERVAL_SECONDS)
 
 
 def download_diff_rows(project_id: str, diff_id: str, token: str) -> list[dict[str, Any]]:
@@ -337,6 +353,12 @@ class Controller(vkt.Controller):
 
         try:
             diff = get_latest_vs_previous_diff(params.autodesk_file, token)
+        except TimeoutError as exc:
+            raise vkt.UserError(
+                "APS is still building the model diff index for these versions. "
+                "The comparison did not finish before the application timeout. "
+                f"Details: {exc}"
+            ) from exc
         except Exception as exc:
             raise vkt.UserError(f"Could not compare versions: {exc}") from exc
 
