@@ -1,0 +1,6 @@
+registered_name ="aps-acc-diff-revit-model" 
+python_version = "3.14"
+app_type = 'simple'
+oauth2_integrations = [
+    "aps"
+]
